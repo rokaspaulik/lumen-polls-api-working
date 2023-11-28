@@ -6,6 +6,10 @@
 php -S localhost:8000 -t public
 ```
 
+## Change DB_DATABASE=
+
+This has to be changed to absolute_path
+
 ## Create database, tables and seed with data
 
 ```

@@ -1,56 +1,81 @@
 <?php
 
-namespace App\Http\Controllers\V1;
+namespace App\Http\Controllers\V2;
 
+use GuzzleHttp\Client;
 use App\Helper\ArrayHelper;
 use App\Models\Presentation;
+use App\Models\Poll;
+use Illuminate\Http\Request;
+use Illuminate\Validation\ValidationException;
 
 /**
- * Implemented some things differently compared to https://infra.devskills.app/interactive-presentation/api/4.0.0
- * Oh well... For next times lesson learned - do the proxy part first.
+ * Here V2 API proxies POST /presentations and GET /presentations/{presentation_id}
  */
 class PresentationController extends Controller
 {
-    public function create()
+    public function create(Request $request, Client $client)
     {
-        $presentation = Presentation::create();
+        try {
+            $this->validate($request, [
+                'current_poll_index' => 'required|integer',
+                'polls' => 'required|array',
+                'polls.*.poll_id' => 'required|uuid',
+                'polls.*.question' => 'required|string',
+                'polls.*.options' => 'required|array',
+                'polls.*.options.*.key' => 'required|string',
+                'polls.*.options.*.value' => 'required|string',
+            ]);
+        } catch (ValidationException $e) {
+            // Handle validation errors and return HTTP 400 response
+            return response()->json(['error' => $e->errors()], 400);
+        }
 
-        return response(json_encode([
-            'presentation_id' => $presentation->id,
-        ]), 201)->withHeaders([
-            'Content-Type' => 'application/json',
-        ]);
-    }
+        $data = $request->only(['current_poll_index', 'polls']);
 
-    public function get(string $id, ArrayHelper $arrayHelper)
-    {
-        $presentation = Presentation::find($id);
-        if (!$presentation) {
-            return response(json_encode([
-                'message' => 'Presentation not found.',
-            ]), 404)->withHeaders([
+        $url = 'https://infra.devskills.app/api/interactive-presentation/v4/presentations';
+
+        $response = $client->post($url, [
+            'headers' => [
                 'Content-Type' => 'application/json',
+            ],
+            'json' => $data,
+        ]);
+
+        // Create same records in our database
+        $presentation = Presentation::create([
+            'current_poll_index' => $data['current_poll_index'],
+        ]);
+
+        foreach ($data['polls'] as $key => $poll) {
+            Poll::create([
+                'presentation_id' => $presentation->id,
+                'poll_index' => (int) $key,
+                'id' => $poll['poll_id'],
+                'question' => $poll['question'],
+                'question' => $poll['question'],
+                'options' => json_encode($poll['options']),
             ]);
         }
 
-        $polls = [];
+        // Forward the response from the external API to the client
+        return response($response->getBody(), $response->getStatusCode())
+            ->header('Content-Type', 'application/json');
+    }
 
-        foreach ($presentation->polls as $poll) {
-            $optionsArray = json_decode($poll['options'], true);
+    public function get(string $id, Client $client)
+    {
+        $url = 'https://infra.devskills.app/api/interactive-presentation/v4/presentations/'.$id;
 
-            $polls[] = [
-                'poll_id' => $poll['id'],
-                'question' => $poll['question'],
-                'options' => $arrayHelper->assignLetters($optionsArray),
-            ];
-        }
-
-        return response(json_encode([
-            'current_poll_index' => $presentation->current_poll_index,
-            'polls' => $polls,
-        ]), 200)->withHeaders([
-            'Content-Type' => 'application/json',
+        $response = $client->get($url, [
+            'headers' => [
+                'Content-Type' => 'application/json',
+            ],
         ]);
+
+        // Forward the response from the external API to the client
+        return response($response->getBody(), $response->getStatusCode())
+            ->header('Content-Type', 'application/json');
     }
 
     public function current(string $id, ArrayHelper $arrayHelper)
